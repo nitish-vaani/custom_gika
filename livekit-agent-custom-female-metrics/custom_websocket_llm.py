@@ -126,6 +126,56 @@ class CustomWebSocketLLM(llm.LLM):
             
             return current_response_id
     
+    # async def _receive_response(self, expected_response_id: int) -> AsyncIterable[str]:
+    #     """Receive streaming response from WebSocket"""
+    #     full_content = ""
+        
+    #     try:
+    #         # Use the same request lock for receiving to prevent concurrent recv calls
+    #         async with self._request_lock:
+    #             while True:
+    #                 response_raw = await asyncio.wait_for(
+    #                     self._ws.recv(),
+    #                     timeout=self.response_timeout
+    #                 )
+                    
+    #                 try:
+    #                     response = json.loads(response_raw)
+    #                 except json.JSONDecodeError as e:
+    #                     logger.error(f"Failed to parse response: {response_raw}")
+    #                     continue
+                    
+    #                 # Check if this is the response we're waiting for
+    #                 if (response.get("response_type") == "response" and 
+    #                     response.get("response_id") == expected_response_id):
+                        
+    #                     content = response.get("content", "")
+    #                     is_complete = response.get("content_complete", False)
+                        
+    #                     # Handle end_call flag
+    #                     if response.get("end_call", False):
+    #                         logger.info("WebSocket LLM requested to end call")
+                        
+    #                     # Only yield non-empty content
+    #                     if content:
+    #                         full_content += content
+    #                         yield content
+                        
+    #                     # Check if response is complete
+    #                     if is_complete:
+    #                         logger.debug(f"Response {expected_response_id} completed: {full_content}")
+    #                         break
+                    
+    #                 else:
+    #                     logger.debug(f"Ignoring message: {response}")
+                        
+    #     except asyncio.TimeoutError:
+    #         logger.error(f"Timeout waiting for response {expected_response_id}")
+    #         raise
+    #     except Exception as e:
+    #         logger.error(f"Error receiving response: {e}")
+    #         raise
+    
     async def _receive_response(self, expected_response_id: int) -> AsyncIterable[str]:
         """Receive streaming response from WebSocket"""
         full_content = ""
@@ -151,10 +201,13 @@ class CustomWebSocketLLM(llm.LLM):
                         
                         content = response.get("content", "")
                         is_complete = response.get("content_complete", False)
+                        should_end_call = response.get("end_call", False)
                         
-                        # Handle end_call flag
-                        if response.get("end_call", False):
+                        # Handle end_call flag - this signals the agent to terminate
+                        if should_end_call:
                             logger.info("WebSocket LLM requested to end call")
+                            # Set a flag that the agent can check
+                            self.should_end_call = True
                         
                         # Only yield non-empty content
                         if content:
@@ -175,7 +228,7 @@ class CustomWebSocketLLM(llm.LLM):
         except Exception as e:
             logger.error(f"Error receiving response: {e}")
             raise
-    
+
     def chat(
         self,
         *,

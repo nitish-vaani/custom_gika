@@ -28,6 +28,99 @@ logger.setLevel(logging.INFO)
 def get_prompt(timezone: str = "Asia/Kolkata") -> str:
     return "You are a helpful telephony assistant"
 
+# async def entrypoint(ctx: JobContext):
+#     """
+#     Main entrypoint for the LiveKit agent
+#     """
+#     # Load configuration
+#     config = AgentConfig()
+    
+#     phone_number = ctx.job.metadata if ctx.job.metadata else None
+#     logger.info(f"🚀 Agent connecting to room {ctx.room.name} to dial {phone_number}")
+
+#     await ctx.connect()
+
+#     # Handle SIP participant setup if phone number provided
+#     if phone_number is not None:
+#         participant_name = f"phone_user-{phone_number}"
+        
+#         # Create SIP participant
+#         await ctx.api.sip.create_sip_participant(
+#             api.CreateSIPParticipantRequest(
+#                 room_name=ctx.room.name,
+#                 sip_trunk_id=config.outbound_trunk_id,
+#                 sip_call_to=phone_number,
+#                 participant_identity=participant_name,
+#             )
+#         )
+
+#         # Wait for participant and check call status
+#         participant = await ctx.wait_for_participant(identity=participant_name)
+
+#         start_time = perf_counter()
+#         while perf_counter() - start_time < 30:  # 30 second timeout
+#             call_status = participant.attributes.get("sip.callStatus")
+            
+#             if call_status == "active":
+#                 logger.info("📞 Call answered by user")
+#                 break
+#             elif participant.disconnect_reason == rtc.DisconnectReason.USER_REJECTED:
+#                 logger.info("❌ User rejected the call")
+#                 await ctx.shutdown()
+#                 return
+#             elif participant.disconnect_reason == rtc.DisconnectReason.USER_UNAVAILABLE:
+#                 logger.info("❌ User unavailable")
+#                 await ctx.shutdown()
+#                 return
+            
+#             await asyncio.sleep(0.1)
+
+#     # Initialize custom AI components
+#     custom_llm = CustomLLM(**config.get_llm_config())
+#     custom_asr = CustomASR(**config.get_asr_config())
+#     custom_tts = CustomTTS(**config.get_tts_config())
+    
+#     # Create your call agent with custom LLM
+#     agent = CallAgent(instructions=get_prompt(), ctx=ctx)
+    
+#     # Create agent session with custom components
+#     session = AgentSession(
+#         stt=custom_asr.get_stt(),
+#         llm=custom_llm.get_llm(),
+#         tts=custom_tts.get_tts(),
+#         vad=silero.VAD.load(
+#             min_silence_duration=config.vad_min_silence_duration,
+#             min_speech_duration=config.vad_min_speech_duration,
+#             max_buffered_speech=config.vad_max_buffered_speech,
+#         ),
+#     )
+
+#     # Event handlers for conversation logging
+#     def on_conversation_item_added(event):
+#         async def handle_conversation_item():
+#             item = event.item
+            
+#             if item.role == "user":
+#                 logger.info(f"[USER] {item.text_content}")
+                        
+#             elif item.role == "assistant":
+#                 logger.info(f"[AGENT] {item.text_content}")
+        
+#         asyncio.create_task(handle_conversation_item())
+    
+#     session.on("conversation_item_added")(on_conversation_item_added)
+
+#     # Start the agent session
+#     try:
+#         await session.start(
+#             agent=agent,
+#             room=ctx.room,
+#         )
+#     finally:
+#         # Cleanup WebSocket LLM connection if using WebSocket
+#         if hasattr(custom_llm, 'close'):
+#             await custom_llm.close()
+
 async def entrypoint(ctx: JobContext):
     """
     Main entrypoint for the LiveKit agent
@@ -105,6 +198,17 @@ async def entrypoint(ctx: JobContext):
                         
             elif item.role == "assistant":
                 logger.info(f"[AGENT] {item.text_content}")
+                
+                # Check if the LLM requested to end the call
+                llm_instance = custom_llm.get_llm()
+                if hasattr(llm_instance, 'should_end_call') and llm_instance.should_end_call:
+                    logger.info("🛑 LLM requested call termination")
+                    # Schedule shutdown after message is delivered
+                    async def delayed_shutdown():
+                        await asyncio.sleep(2)  # Wait for TTS to finish
+                        await ctx.shutdown()
+                    
+                    asyncio.create_task(delayed_shutdown())
         
         asyncio.create_task(handle_conversation_item())
     
@@ -116,10 +220,16 @@ async def entrypoint(ctx: JobContext):
             agent=agent,
             room=ctx.room,
         )
+    except Exception as e:
+        logger.error(f"Agent session error: {e}")
     finally:
         # Cleanup WebSocket LLM connection if using WebSocket
         if hasattr(custom_llm, 'close'):
             await custom_llm.close()
+        
+        # Ensure cleanup
+        logger.info("🛑 Agent session ended")
+
 
 def prewarm_fnc(proc: JobProcess):
     """Prewarm function to load VAD model"""

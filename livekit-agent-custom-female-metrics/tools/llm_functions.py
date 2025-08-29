@@ -34,20 +34,37 @@ class CallAgent(Agent):
     def __init__(self, instructions: str, ctx: JobContext):
         super().__init__(instructions=instructions)
         self.ctx = ctx
-        # self.register_tools()
+        self.initial_greeting_sent = False
 
     async def on_enter(self):
         """Called when agent enters the conversation"""
-        await self.session.say(
-            text="Hello, there. How are you today?",
-        )
+        if not self.initial_greeting_sent:
+            await self.session.say(
+                text="Hello, there. How are you today?",
+            )
+            self.initial_greeting_sent = True
 
 
     @function_tool()
     async def end_call(self, context: RunContext):
         """Called when the user wants to end the call"""
         logger.info(f"Ending the call for {context.participant.identity}")
-        await context.room.disconnect()
+        
+        # Say goodbye before ending
+        await context.say("Take care. Have a good day!")
+        
+        # Wait a moment for the message to be delivered
+        await asyncio.sleep(1)
+        
+        # Properly disconnect the room
+        try:
+            await context.room.disconnect()
+        except Exception as e:
+            logger.error(f"Error disconnecting room: {e}")
+            # Force shutdown if disconnect fails
+            await self.ctx.shutdown()
+        
+        return "Call ended successfully"
 
     @function_tool()
     async def detected_answering_machine(self, context: RunContext):
